@@ -71,3 +71,7 @@ eureka.client.register-with-eureka=false
 eureka.client.fetch-registry=false
 
 management.endpoints.web.exposure.include=*
+
+app for mainmicros
+eureka.client.serviceUrl.defaultZone=${EUREKA_URI:http://localhost:8761/eureka}
+eureka.instance.prefer-ip-address=true
