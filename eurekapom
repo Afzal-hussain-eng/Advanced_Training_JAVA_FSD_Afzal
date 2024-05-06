@@ -62,3 +62,12 @@ This XML file does not appear to have any style information associated with it. 
 </plugins>
 </build>
 </project>
+
+
+appproperties
+
+server.port=8761
+eureka.client.register-with-eureka=false
+eureka.client.fetch-registry=false
+
+management.endpoints.web.exposure.include=*
