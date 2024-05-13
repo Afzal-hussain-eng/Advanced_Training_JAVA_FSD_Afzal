@@ -1,0 +1,44 @@
+
+@Saga
+public class OrderSaga {
+
+	@Autowired
+	private transient CommandGateway commandGateway;
+
+	private static final Logger LOGGER = LoggerFactory.getLogger(OrderSaga.class);
+	
+	@StartSaga
+	@SagaEventHandler(associationProperty = "orderId")
+	public void handle(OrderCreatedEvent orderCreatedEvent) {
+		
+		ReserveProductCommand reserveProductCommand = ReserveProductCommand.builder()
+				.orderId(orderCreatedEvent.getOrderId())
+				.quantity(orderCreatedEvent.getQuantity())
+				.userId(orderCreatedEvent.getUserId())
+				.productId(orderCreatedEvent.getProductId())
+				.build();
+		
+		LOGGER.info("OrderCreatedEvent handled for orderId: " + reserveProductCommand.getOrderId() +
+				" and productId: " + reserveProductCommand.getProductId());
+		
+		commandGateway.send(reserveProductCommand, new CommandCallback<ReserveProductCommand, Object>() {
+		
+			@Override
+			public void onResult(CommandMessage<? extends ReserveProductCommand> commandMessage,
+					CommandResultMessage<? extends Object> commandResultMessage) {
+
+				if (commandResultMessage.isExceptional()) {
+					// Start a compensating transaction
+				}
+			}
+		});
+	}
+	
+	@SagaEventHandler(associationProperty = "orderId")
+	public void handle(ProductReservedEvent productReservedEvent) {
+		
+		LOGGER.info("ProductReservedEvent is called for productId: " + productReservedEvent.getOrderId() +
+				" and orderId: " + productReservedEvent.getOrderId());
+	}
+	
+}
