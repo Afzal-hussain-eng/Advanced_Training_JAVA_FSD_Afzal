@@ -9,3 +9,76 @@
 				" and orderId: " + productReservedEvent.getOrderId());
 		
 	}
+
+@Data
+@Builder
+public class PaymentDetails {
+
+	private final String name;
+	private final String cardNumber;
+	private final int validUntilMonth;
+	private final int validUntilYear;
+	private final String cvv;
+}
+
+
+@Data
+@Builder
+public class User {
+
+	private final String firstName;
+	private final String lastName;
+	private final String userId;
+	private final PaymentDetails paymentDetails;	
+}
+
+@Data
+@AllArgsConstructor
+public class FetchUserPaymentDetailsQuery {
+
+	private String userId;
+}
+
+
+@Component
+public class UserEventsHandler {
+
+	@QueryHandler
+	public User findUserPaymentDetails(FetchUserPaymentDetailsQuery query) {
+		
+		PaymentDetails paymentDetails = PaymentDetails.builder()
+				.cardNumber("123Card")
+				.cvv("123")
+				.name("Afzal Hussain Gadag")
+				.validUntilMonth(12)
+				.validUntilYear(2030)
+				.build();
+		
+		User user = User.builder()
+				.firstName("Afzal Hussain")
+				.lastName("Gadag")
+				.userId(query.getUserId())
+				.paymentDetails(paymentDetails)
+				.build();
+		
+		return user;
+	}
+}
+
+@RestController
+@RequestMapping("/users")
+public class UsersQueryController {
+
+	@Autowired
+	private QueryGateway queryGateway;
+
+	@GetMapping("/{userId}/payments-details")
+	public User getUserPaymentDetails(@PathVariable String userId ) {
+		
+		FetchUserPaymentDetailsQuery query = new FetchUserPaymentDetailsQuery(userId);
+		
+		return queryGateway.query(query, ResponseTypes.instanceOf(User.class)).join();
+	}
+}
+server.port=0
+spring.application.name=users-service
