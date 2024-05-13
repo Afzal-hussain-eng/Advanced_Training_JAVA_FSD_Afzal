@@ -45,3 +45,16 @@ public class ProductServiceErrorHandler {
 write thsi code in product aggregate command habdler where all the validation is done
 //if(true)
 		//	throw new Exception("An error took place in the CreateProductCommand @CommandHandler method.");
+
+
+@ExceptionHandler(resultType = IllegalArgumentException.class)
+	public void handle(IllegalArgumentException exception) {
+		//log error message
+		throw exception;
+	}
+
+	@ExceptionHandler(resultType = Exception.class)
+	public void handle(Exception exception) throws Exception {
+		//log error message		
+		throw exception;
+	}
