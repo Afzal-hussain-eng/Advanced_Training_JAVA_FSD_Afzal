@@ -1,0 +1,11 @@
+@EventHandler
+	public void on(ProductReservedEvent productReservedEvent) {
+		
+		ProductEntity productEntity = productRepository.findByProductId(productReservedEvent.getProductId());
+		productEntity.setQuantity(productEntity.getQuantity() - productReservedEvent.getQuantity());
+		productRepository.save(productEntity);
+		
+		LOGGER.info("ProductReservedEvent is called for productId: " + productReservedEvent.getProductId() +
+				" and orderId: " + productReservedEvent.getOrderId());
+		
+	}
