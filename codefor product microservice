@@ -82,3 +82,228 @@ public class UsersQueryController {
 }
 server.port=0
 spring.application.name=users-service
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////day 4
+@Data
+@Builder
+public class ProcessPaymentCommand {
+
+	@TargetAggregateIdentifier
+	private final String paymentId;
+	private final String orderId;
+	private final PaymentDetails paymentDetails;
+}
+
+@Value
+public class PaymentProcessedEvent {
+
+	private final String orderId;
+	private final String paymentId;
+}
+
+
+order saga
+
+@Saga
+public class OrderSaga {
+
+	@Autowired
+	private transient CommandGateway commandGateway;
+
+	@Autowired
+	private transient QueryGateway queryGateway;
+	
+	private static final Logger LOGGER = LoggerFactory.getLogger(OrderSaga.class);
+	
+	@StartSaga
+	@SagaEventHandler(associationProperty = "orderId")
+	public void handle(OrderCreatedEvent orderCreatedEvent) {
+		
+		ReserveProductCommand reserveProductCommand = ReserveProductCommand.builder()
+				.orderId(orderCreatedEvent.getOrderId())
+				.quantity(orderCreatedEvent.getQuantity())
+				.userId(orderCreatedEvent.getUserId())
+				.productId(orderCreatedEvent.getProductId())
+				.build();
+		
+		LOGGER.info("OrderCreatedEvent handled for orderId: " + reserveProductCommand.getOrderId() +
+				" and productId: " + reserveProductCommand.getProductId());
+		
+		commandGateway.send(reserveProductCommand, new CommandCallback<ReserveProductCommand, Object>() {
+		
+			@Override
+			public void onResult(CommandMessage<? extends ReserveProductCommand> commandMessage,
+					CommandResultMessage<? extends Object> commandResultMessage) {
+
+				if (commandResultMessage.isExceptional()) {
+					// Start a compensating transaction
+				}
+			}
+		});
+	}
+	
+	@SagaEventHandler(associationProperty = "orderId")
+	public void handle(ProductReservedEvent productReservedEvent) {
+		
+		// Process User Payment
+		LOGGER.info("ProductReservedEvent is called for productId: " + productReservedEvent.getOrderId() +
+				" and orderId: " + productReservedEvent.getOrderId());
+		
+		FetchUserPaymentDetailsQuery fetchUserPaymentDetailsQuery = 
+				new FetchUserPaymentDetailsQuery(productReservedEvent.getUserId());
+		
+		User userPaymentDetails = null;
+		
+		try {
+			userPaymentDetails = queryGateway.query(fetchUserPaymentDetailsQuery, 
+				ResponseTypes.instanceOf(User.class)).join();
+		}catch (Exception ex) {
+			LOGGER.error(ex.getMessage());
+			// Start a compensating transaction
+			return;
+		}
+		
+		if (userPaymentDetails == null) {
+			// Start a compensating transaction
+			return;
+		}
+		
+		LOGGER.info("Successfully fetched user payment details for user: " + userPaymentDetails.getFirstName());
+
+		ProcessPaymentCommand processPaymentCommand = ProcessPaymentCommand.builder()
+				.orderId(productReservedEvent.getOrderId())
+				.paymentDetails(userPaymentDetails.getPaymentDetails())
+				.paymentId(UUID.randomUUID().toString())
+				.build();
+		
+		String result = null;
+		try {
+			result = commandGateway.sendAndWait(processPaymentCommand, 10, TimeUnit.SECONDS);
+		}catch (Exception ex) {
+			LOGGER.error(ex.getMessage());
+			// Start a compensating transaction
+		}
+		
+		if (result == null) {
+			LOGGER.info("The ProcessPaymentCommand resulted in Null.class Initiating a compensating TX");
+			// Start a compensating transaction
+		}
+		
+	}
+	
+	@SagaEventHandler(associationProperty = "orderId")
+	public void handle(PaymentProcessedEvent paymentProcessedEvent) {
+		
+		//Send an ApproveOrderCommand
+		
+		ApproveOrderCommand approveOrderCommand = 
+				new ApproveOrderCommand(paymentProcessedEvent.getOrderId());
+		
+		commandGateway.send(approveOrderCommand);
+	}
+	
+	@EndSaga
+	@SagaEventHandler(associationProperty = "orderId")
+	public void handle(OrderApprovedEvent orderApprovedEvent) {
+		
+		LOGGER.info("Order is approved. Order Saga is complete for orderId: " 
+				+ orderApprovedEvent.getOrderId());
+		// SagaLifecycle.end();
+	}
+}
+
+payment aggregate class in com.afzal.command
+
+@Aggregate
+public class PaymentAggregate {
+
+	@AggregateIdentifier
+	private String paymentId;
+	private String orderId;
+	
+	public PaymentAggregate() {
+	}
+	
+	@CommandHandler
+	public PaymentAggregate(ProcessPaymentCommand processPaymentCommand) {
+		
+		if(processPaymentCommand.getPaymentDetails() == null) {
+			throw new IllegalArgumentException("Missing payment details");
+		}
+		if(processPaymentCommand.getOrderId() == null) {
+			throw new IllegalArgumentException("Missing orderId");
+		}
+		if(processPaymentCommand.getPaymentId() == null) {
+			throw new IllegalArgumentException("Missing paymentId");
+		}
+		
+		// BL
+		
+		AggregateLifecycle.apply(new PaymentProcessedEvent(processPaymentCommand.getOrderId(),
+				processPaymentCommand.getPaymentId()));
+	}
+	
+	@EventSourcingHandler
+	public void on(PaymentProcessedEvent paymentProcessedEvent) {
+		this.paymentId = paymentProcessedEvent.getPaymentId();
+		this.orderId = paymentProcessedEvent.getOrderId();
+	}
+}
+payment entity in com.afzal.data
+@Data
+@Entity
+@Table(name = "payments")
+public class PaymentEntity implements Serializable {
+	
+	private static final long serialVersionUID = -5365497269424757005L;
+
+	@Id
+	private String paymentId;
+
+	@Column
+	private String orderId;
+}
+
+payment repository in com.afzal.data
+public interface PaymentRepository extends JpaRepository<PaymentEntity, String>{
+
+}
+paymenteventhandler in com.afzal.events
+@Component
+public class PaymentEventsHandler {
+
+	private final Logger LOGGER = LoggerFactory.getLogger(PaymentEventsHandler.class);
+	private final PaymentRepository paymentRepository;
+	
+	public PaymentEventsHandler(PaymentRepository paymentRepository) {
+		this.paymentRepository = paymentRepository;
+	}
+	
+	@EventHandler
+	public void on(PaymentProcessedEvent event) {
+		
+		LOGGER.info("PaymentProcessedEvent is called for orderId: " + event.getOrderId());
+		
+		PaymentEntity paymentEntity = new PaymentEntity();
+		BeanUtils.copyProperties(event, paymentEntity);
+		
+		paymentRepository.save(paymentEntity);
+	}
+}
+
+app.prop
+server.port=0
+spring.application.name=payments-service
+
+spring.h2.console.settings.web-allow-others=true
+
+spring.datasource.url=jdbc:h2:mem:paymentdb
+spring.datasource.driver-class-name=org.h2.Driver
+spring.datasource.username=sa
+spring.datasource.password=
+
+#Accessing the H2 Console
+spring.h2.console.enabled=true
+spring.h2.console.path=/h2-console
+
+
