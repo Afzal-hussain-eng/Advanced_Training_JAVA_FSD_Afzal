@@ -305,5 +305,217 @@ spring.datasource.password=
 #Accessing the H2 Console
 spring.h2.console.enabled=true
 spring.h2.console.path=/h2-console
+///////////////////////////////////day 4 evening changes
+in core microservice
+
+com.afzal.core.commands;
+
+@Data
+@Builder
+public class CancelProductReservationCommand {
+
+	@TargetAggregateIdentifier
+	private final String productId;
+	private final int quantity;
+	private final String orderId;
+	private final String userId;
+	private final String reason;
+}
+
+in order saga @endsaga
+	@EndSaga
+	@SagaEventHandler(associationProperty = "orderId")
+	public void handle(OrderRejectedEvent orderRejectedEvent) {
+		
+		LOGGER.info("Successfully reject order with id : " + orderRejectedEvent.getOrderId());
+	}
+	
+	private void cancelProductReservation(ProductReservedEvent productReservedEvent, String reason) {
+		
+		CancelProductReservationCommand cancelProductReservationCommand = 
+				CancelProductReservationCommand.builder()
+				.orderId(productReservedEvent.getOrderId())
+				.productId(productReservedEvent.getProductId())
+				.quantity(productReservedEvent.getQuantity())
+				.userId(productReservedEvent.getUserId())
+				.reason(reason)
+				.build();
+		
+		commandGateway.send(cancelProductReservationCommand);
+	}
+in @sagaeventhandler hadle productreserved event
+
+	User userPaymentDetails = null;
+		
+		try {
+			userPaymentDetails = queryGateway.query(fetchUserPaymentDetailsQuery, 
+				ResponseTypes.instanceOf(User.class)).join();
+		}catch (Exception ex) {
+			LOGGER.error(ex.getMessage());
+			// Start a compensating transaction
+			cancelProductReservation(productReservedEvent, ex.getMessage());
+			return;
+		}
+
+create ProductReservationCancelledEvent class in core project
+@Data
+@Builder
+public class ProductReservationCancelledEvent {
+
+	private final String productId;
+	private final int quantity;
+	private final String orderId;
+	private final String userId;
+	private final String reason;
+}
+
+
+inproduct service product aggregate commamd handle the CancelProductReservationCommand
+@CommandHandler
+	public void handle(CancelProductReservationCommand cancelProductReservationCommand) {
+		
+		ProductReservationCancelledEvent productReservationCancelledEvent =
+				ProductReservationCancelledEvent.builder()
+				.orderId(cancelProductReservationCommand.getOrderId())
+				.productId(cancelProductReservationCommand.getProductId())
+				.quantity(cancelProductReservationCommand.getQuantity())
+				.reason(cancelProductReservationCommand.getReason())
+				.userId(cancelProductReservationCommand.getUserId())
+				.build();
+		
+		AggregateLifecycle.apply(productReservationCancelledEvent);
+	}
+	
+	@EventSourcingHandler
+	public void on(ProductReservationCancelledEvent productReservationCancelledEvent) {
+		
+		this.quantity += productReservationCancelledEvent.getQuantity();
+	}
+}
+
+
+		
+		if (userPaymentDetails == null) {
+			// Start a compensating transaction
+			cancelProductReservation(productReservedEvent, "Could not fetch user payment details");
+			return;
+		}
+		
+		LOGGER.info("Successfully fetched user payment details for user: " + userPaymentDetails.getFirstName());
+
+		ProcessPaymentCommand processPaymentCommand = ProcessPaymentCommand.builder()
+				.orderId(productReservedEvent.getOrderId())
+				.paymentDetails(userPaymentDetails.getPaymentDetails())
+				.paymentId(UUID.randomUUID().toString())
+				.build();
+		
+		String result = null;
+		try {
+			result = commandGateway.sendAndWait(processPaymentCommand, 10, TimeUnit.SECONDS);
+		}catch (Exception ex) {
+			LOGGER.error(ex.getMessage());
+			// Start a compensating transaction
+			cancelProductReservation(productReservedEvent, ex.getMessage());
+		}
+		
+		if (result == null) {
+			LOGGER.info("The ProcessPaymentCommand resulted in Null.class Initiating a compensating TX");
+			// Start a compensating transaction
+			cancelProductReservation(productReservedEvent, "Could not process used payment with provided payment details.");
+		}
+		
+	}
+
+create a handler method in productevent handler in product service project
+@EventHandler
+	public void on(ProductReservationCancelledEvent productReservationCancelledEvent) {
+		
+		ProductEntity currentlyStoredProduct =
+				productRepository.findByProductId(productReservationCancelledEvent.getProductId());
+		
+		int newQuantity = currentlyStoredProduct.getQuantity() + productReservationCancelledEvent.getQuantity();
+		currentlyStoredProduct.setQuantity(newQuantity);
+		
+		productRepository.save(currentlyStoredProduct);
+	}
+
+in oredr saga
+	@SagaEventHandler(associationProperty = "orderId")
+	public void handle(ProductReservationCancelledEvent productReservationCancelledEvent) {
+		
+		// Create and send a RejectOrderCommand
+		RejectOrderCommand rejectOrderCommand = new RejectOrderCommand(
+				productReservationCancelledEvent.getOrderId(),
+				productReservationCancelledEvent.getReason());
+		
+		commandGateway.send(rejectOrderCommand);
+	}
+
+create a reject order commamd in order service 
+@Value
+public class RejectOrderCommand {
+
+	@TargetAggregateIdentifier
+	private final String orderId;
+	private final String reason;
+}
+add this in handle order create event
+if (commandResultMessage.isExceptional()) {
+					
+					// Start a compensating transaction
+					RejectOrderCommand rejectOrderCommand = new RejectOrderCommand(
+							orderCreatedEvent.getOrderId(),
+							commandResultMessage.exceptionResult().getMessage());
+					
+					commandGateway.send(rejectOrderCommand);
+				}
+
+create a command handler in order aggregate class
+@CommandHandler
+	public void handle(RejectOrderCommand rejectOrderCommand) {
+		
+		// BL
+		
+		// Create and publish the OrderRejectEvent
+		OrderRejectedEvent orderRejectedEvent = new OrderRejectedEvent(
+				rejectOrderCommand.getOrderId(), rejectOrderCommand.getReason());
+		
+		AggregateLifecycle.apply(orderRejectedEvent);
+	}
+	
+	@EventSourcingHandler
+	public void on(OrderRejectedEvent orderRejectedEvent) {
+		
+		this.orderStatus = orderRejectedEvent.getOrderStatus();
+	}
+}
+create a order erject event in event package
+@Value
+public class OrderRejectedEvent {
+
+	private final String orderId;
+	private final String reason;
+	private OrderStatus orderStatus = OrderStatus.REJECTED;
+}
+publis the order reject hadler
+handle the order reject event in  orderevent handler 
+@EventHandler
+	public void on(OrderRejectedEvent event) throws Exception {
+		
+		OrderEntity orderEntity = orderRepository.findByOrderId(event.getOrderId());
+		
+		orderEntity.setOrderStatus(event.getOrderStatus());
+		
+		orderRepository.save(orderEntity);
+	}
+handle the order reject event handler in order saga 
+@EndSaga
+	@SagaEventHandler(associationProperty = "orderId")
+	public void handle(OrderRejectedEvent orderRejectedEvent) {
+		
+		LOGGER.info("Successfully reject order with id : " + orderRejectedEvent.getOrderId());
+	}
+	
+
 
 
